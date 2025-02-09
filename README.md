@@ -36,10 +36,10 @@ You can install the package directly from GitHub:
 
 ```bash
 # Install latest version
-pip install git+https://github.com/cypher-o/log-cleaner.git
+pip install git+https://github.com/cypher-o/log_cleaner.git
 
 # Or specify a version
-pip install git+https://github.com/cypher-o/log-cleaner.git@v1.0.0
+pip install git+https://github.com/cypher-o/log_cleaner.git@v1.0.0
 ```
 
 ### From source
@@ -47,8 +47,8 @@ pip install git+https://github.com/cypher-o/log-cleaner.git@v1.0.0
 1. Clone this repository:
   
   ```bash
-  git clone https://github.com/cypher-o/log-cleaner.git
-  cd log-cleaner
+  git clone https://github.com/cypher-o/log_cleaner.git
+  cd log_cleaner
   ```
 
 2. Install in development mode:
