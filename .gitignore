@@ -8,3 +8,5 @@ media/
 *.python-version
 *.pid
 .coverage
+dist/
+logcleaner.egg-info/
