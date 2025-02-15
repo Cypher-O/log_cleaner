@@ -28,7 +28,7 @@ jobs:
 
       - name: Publish to PyPI
         env:
-          TWINE_USERNAME: __token__  # Use this for PyPI token
-          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}  # Your token stored in GitHub secrets
+          TWINE_USERNAME: __token__  
+          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
         run: |
           twine upload dist/*

@@ -63,10 +63,10 @@ After installation, you can run the tool from anywhere using:
 
   ```bash
   # Using the command-line tool
-  logcleaner
+  log-cleaner
 
   # Or using Python's -m flag
-  python -m logcleaner
+  python -m log-cleaner
   ```
 
 ## Supported Patterns
