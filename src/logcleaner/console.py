@@ -43,7 +43,6 @@ class ConsoleUI:
         title_text = "Log Cleaner v1.0.0".center(box_width) 
         tagline_text = "Clean your logs with style".center(box_width)  
 
-        # Apply styling **after** centering to avoid misalignment
         title = f"{self.BOLD}{self.WHITE}{title_text}{self.END}"
         tagline = f"{self.MAGENTA}{tagline_text}{self.END}"
 
@@ -73,8 +72,8 @@ class ConsoleUI:
         step_text = f"Step {current_step}/{total_steps}: {step_name}"  
         text_length = len(step_text)
 
-        # Ensure the text is centered by calculating padding
-        padding = box_width - text_length - 2  # -2 accounts for the side borders "│ │"
+        
+        padding = box_width - text_length - 2 
         left_padding = padding // 2
         right_padding = padding - left_padding
 

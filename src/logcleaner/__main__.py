@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from datetime import datetime, timedelta
 import sys
 from .cleaner import LogCleaner
 from .console import ConsoleUI 
@@ -7,14 +8,22 @@ def main():
     try:
         cleaner = LogCleaner()
         
-        if cleaner.initialize_session():
-            cleaner.process_files()
-            cleaner.print_summary()
-            
-            if cleaner.stats['files_processed'] > 0:
-                cleaner.ui.print_success("Cleanup completed successfully!")
-            else:
-                cleaner.ui.print_warning("No files were modified.")
+        if len(sys.argv) > 1 and sys.argv[1] == '--clean-logs':
+            # Running from cron job
+            log_dir = sys.argv[2]
+            log_files = cleaner.log_manager.get_log_files(log_dir)
+            cutoff_date = datetime.now() - timedelta(days=30)
+            cleaner.log_manager.clean_logs_before_date(log_files, cutoff_date)
+        else:
+            # Interactive mode
+            if cleaner.initialize_session():
+                cleaner.process_files()
+                cleaner.print_summary()
+                
+                if cleaner.stats['files_processed'] > 0:
+                    cleaner.ui.print_success("Cleanup completed successfully!")
+                else:
+                    cleaner.ui.print_warning("No modifications were made to the code files.")
                 
         return 0
         
@@ -29,18 +38,3 @@ def main():
 if __name__ == "__main__":
     main()
     
-    
-# def main():
-#     cleaner = LogCleaner()
-    
-#     if cleaner.initialize_session():
-#         cleaner.process_files()
-#         cleaner.print_summary()
-        
-#         if cleaner.stats['files_processed'] > 0:
-#             cleaner.ui.print_success("Cleanup completed successfully!")
-#         else:
-#             cleaner.ui.print_warning("No files were modified.")
-
-# if __name__ == "__main__":
-#     main()

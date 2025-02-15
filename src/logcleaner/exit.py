@@ -26,7 +26,6 @@ class GracefulExit:
         self.killed = False
         self.testing = testing
         
-        # Only set up signal handlers if not in testing mode
         if not testing:
             signal.signal(signal.SIGINT, self._exit_handler)
             signal.signal(signal.SIGTERM, self._exit_handler)
@@ -55,7 +54,6 @@ class GracefulExit:
         self.ui.print_warning("\nReceived termination signal. Cleaning up...")
 
         if self.testing:
-            # In test mode, raise KeyboardInterrupt to allow test verification
             raise KeyboardInterrupt
             
         try:

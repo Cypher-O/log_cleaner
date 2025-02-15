@@ -9,4 +9,4 @@ media/
 *.pid
 .coverage
 dist/
-logcleaner.egg-info/
+**.egg-info/

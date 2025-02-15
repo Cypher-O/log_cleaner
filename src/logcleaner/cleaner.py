@@ -1,19 +1,35 @@
 import os
 from pathlib import Path
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 import shutil
 import sys
 from typing import Dict, List, Optional, Set, Union
-
+from .file_manager import LogFileManager
 from .console import ConsoleUI
 from .exit import GracefulExit
 
 class LogCleaner:
     """
-    A utility class designed to clean log statements from various programming files, including JavaScript, TypeScript, and Python.
-    This class supports functionalities such as creating backups of original files, managing user interactions, and generating reports on the cleaning process.
+    Utility class for cleaning log statements from various programming files (JavaScript, TypeScript, Python).
+    
+    Features:
+        - Cleans log statements and creates backups
+        - Manages user interactions
+        - Generates reports on the cleaning process
+
+    Attributes:
+        ASSETS_DIR_NAME (str): Directory for cleaned assets
+        SUPPORTED_EXTENSIONS (Dict[str, str]): Supported file extensions and their descriptions
+
+    Args:
+        testing (bool): Flag for test mode during initialization
+
+    Example:
+        cleaner = LogCleaner()
+        if cleaner.initialize_session():
+            print("Session initialized successfully")
     """
     ASSETS_DIR_NAME = 'lc-cleaned-assets'
     
@@ -40,8 +56,7 @@ class LogCleaner:
         
         self.exit_handler = GracefulExit(self.ui, testing=testing)
         self.exit_handler.register_cleanup(self.cleanup)
-        
-        # self.exit_handler = GracefulExit(self.ui)
+        self.log_manager = LogFileManager(self.ui)
         
         self.should_backup = False
         
@@ -50,7 +65,6 @@ class LogCleaner:
         
         self.selected_types: Set[str] = set()
         
-        # Console methods for JavaScript
         self.console_methods = [
             'log', 'error', 'warn', 'info', 'debug', 
             'trace', 'dir', 'dirxml', 'table', 'count',
@@ -58,8 +72,7 @@ class LogCleaner:
             'groupEnd', 'groupCollapsed', 'time', 'timeEnd',
             'timeLog', 'profile', 'profileEnd'
         ]
-        
-        # Python logging patterns
+
         self.python_patterns = [
             r'import\s+logging\s*(?:as\s+\w+)?\s*',
             r'from\s+logging\s+import\s+.*',
@@ -70,11 +83,9 @@ class LogCleaner:
             r'_?logger\.[a-zA-Z]+\s*\(\s*(?:[^()]*?\s*\+?\s*)*[^()]*?\)'
         ]
         
-        # JavaScript console pattern
         methods_pattern = '|'.join(self.console_methods)
         self.console_pattern = rf'\bconsole\.({methods_pattern})\s*\(\s*(?:[^;]*?\s*\+?\s*)*[^;]*?\);?'
         
-        # Compile patterns with flags
         self.compiled_python_patterns = [
             re.compile(pattern, re.MULTILINE | re.DOTALL) 
             for pattern in self.python_patterns
@@ -84,7 +95,6 @@ class LogCleaner:
             re.MULTILINE | re.DOTALL
         )
         
-        # Statistics
         self.stats = {
             'files_processed': 0,
             'lines_removed': 0,
@@ -94,106 +104,35 @@ class LogCleaner:
         
     def initialize_session(self) -> bool:
         """
-        Initializes the cleanup session interactively, guiding the user through the process of selecting files or directories for cleaning.
-
-        This method prompts the user to specify the source of files to be cleaned and the types of files to include. It also
-        configures the assets directory and prompts the user regarding backup preferences.
+        Initializes the cleanup session interactively, guiding the user through the process
+        of selecting files or directories for cleaning.
 
         Returns:
             bool: True if the session is initialized successfully; False otherwise.
         """
         try:
-            # Step 1: Select source
-            self.ui.print_step("Select source", 3, 1)
-            choice = self.ui.prompt_choice(
-                "Where are the files you want to clean?",
-                ["Select a directory", "Select specific files"]
-            )
-            
-            # Step 2: Get path and validate
-            self.ui.print_step("Specify location", 3, 2)
-            if choice == 1:
-                # Directory mode
-                while True:
-                    try:
-                        path = input(f"{self.ui.BOLD}Enter directory path (or '.' for current directory): {self.ui.END}")
-                        if os.path.isdir(path):
-                            self.source_path = os.path.abspath(path)
-                            # Show supported file types
-                            self.ui.print_info("\nSupported file types in directory mode:")
-                            for ext, desc in self.SUPPORTED_EXTENSIONS.items():
-                                self.ui.print_info(f"  {ext} - {desc}")
-                            break
-                        self.ui.print_error("Invalid directory path")
-                    except KeyboardInterrupt:
-                        raise
-                    except Exception as e:
-                        self.ui.print_error(f"Error: {str(e)}")
-                    
-                # Step 3: Select file types for directory mode
-                self.ui.print_step("Select file types", 3, 3)
-                for ext, desc in self.SUPPORTED_EXTENSIONS.items():
-                    if self.ui.prompt_yes_no(f"Include {ext} ({desc})?"):
-                        self.selected_types.add(ext)
-
-                if not self.selected_types:
-                    self.ui.print_error("No file types selected")
-                    return False
-                    
-            else:
-                # File selection mode
-                files = []
-                self.ui.print_info("\nSupported file types:")
-                for ext, desc in self.SUPPORTED_EXTENSIONS.items():
-                    self.ui.print_info(f"  {ext} - {desc}")
-                    
-                self.ui.print_warning("\nEnter file paths one by one. Press Enter twice when done.")
+            while True:
+                mode_choice = self._get_cleaning_mode()
                 
-                while True:
-                    file = input(f"{self.ui.BOLD}Enter file path (or press Enter to finish): {self.ui.END}")
-                    if not file and files:
-                        break
-                    if not file:
+                if mode_choice in [1, 3]:  # Code files or both
+                    if not self._setup_code_cleaning():
+                        if not self._prompt_continue():
+                            return False
                         continue
-                    files.append(file)
-                
-                if not files:
-                    self.ui.print_error("No files specified")
-                    return False
-                    
-                # Validate files
-                valid_files, invalid_files = self.validate_files(files)
-                
-                if invalid_files:
-                    self.ui.print_error("\nThe following files cannot be processed:")
-                    for file in invalid_files:
-                        self.ui.print_error(f"  - {file}")
-                        
-                if not valid_files:
-                    self.ui.print_error("No valid files to process")
-                    return False
-                    
-                self.source_path = valid_files
-                # In file mode, automatically determine selected types from valid files
-                self.selected_types = {Path(f).suffix.lower() for f in valid_files}
 
-            # Initialize assets directory and configure backup
-            self.assets_dir = self.get_assets_directory(self.source_path)
-            
-            # Configure backup
-            self.should_backup = self.ui.prompt_yes_no("Create backup of modified files?")
-            
-            if self.should_backup:
-                self.create_backup_directory()
-                self.setup_logging()
-                
-                # Show absolute paths for assets and backup locations
-                self.ui.print_info("\nBackup Configuration:")
-                self.ui.print_info(f"Assets Directory: {self.assets_dir}")
-                self.ui.print_info(f"Backup Location: {self.current_backup_dir}")
-            
-            return True
-        
+                if mode_choice in [2, 3]:  # Log files or both
+                    if not self._setup_log_cleaning():
+                        if not self._prompt_continue():
+                            return False
+                        continue
+
+                if mode_choice == 2:
+                    if not self._prompt_continue():
+                        return False
+                    continue
+
+                return True
+
         except KeyboardInterrupt:
             self.cleanup()
             return False
@@ -201,6 +140,446 @@ class LogCleaner:
             self.ui.print_error(f"Error during initialization: {str(e)}")
             self.cleanup()
             return False
+
+    def _handle_existing_cron(self) -> bool:
+        """
+        Handles removal of existing cron jobs if present.
+
+        This method checks for any active automated cleaning schedules and prompts the user to remove them.
+        
+        Returns:
+            bool: True if the user decides to continue; False if cleaning should be aborted.
+        """
+        if self.log_manager.has_cron_job():
+            self.ui.print_info("An automated log cleaning schedule is currently active")
+            if self.ui.prompt_yes_no("Would you like to remove the automated cleaning schedule?"):
+                if self.log_manager.remove_cron_job():
+                    self.ui.print_success("Automated cleaning schedule removed")
+                    return self._prompt_continue()
+        return True
+    
+    def _get_cleaning_mode(self) -> int:
+        """
+        Prompts user for cleaning mode selection.
+
+        This method allows the user to choose between cleaning log statements in code files, cleaning log files, or both.
+
+        Returns:
+            int: The selected cleaning mode.
+        """
+        self.ui.print_step("Select cleaning mode", 4, 1)
+        
+        choices = ["Log statements in code files", "Log files", "Both"]
+        
+        if self.log_manager.has_cron_job():
+            choices.append("Manage automated cleaning")
+        
+        mode_choice = self.ui.prompt_choice(
+            "What would you like to do?",
+            choices
+        )
+    
+        if mode_choice == 4:
+            return self._handle_automation_management()
+            
+        return mode_choice
+
+    def _handle_automation_management(self) -> int:
+        """
+        Manages automated cleaning schedule options.
+
+        This method presents the user with options to view, remove, or manage existing automated cleaning schedules.
+
+        Returns:
+            int: The mode selected after managing automation.
+        """
+        self.ui.print_step("Automation Management", 4, 1)
+        
+        jobs = list(self.log_manager.get_cron_jobs())
+        
+        if not jobs:
+            self.ui.print_info("No automated cleaning schedules found")
+            return self._get_cleaning_mode() 
+            
+        self.ui.print_info("\nCurrent automation schedules:")
+        for i, job in enumerate(jobs, 1):
+            schedule = job.slices.render()
+            directory = job.command.split('"')[1]  
+            self.ui.print_info(f"{i}. Directory: {directory}")
+            self.ui.print_info(f"   Schedule: {schedule}")
+            
+        choices = ["Remove specific schedule", "Remove all schedules", "Return to main menu"]
+        action = self.ui.prompt_choice("What would you like to do?", choices)
+        
+        if action == 1: 
+            if len(jobs) == 1:
+                job_to_remove = jobs[0]
+            else:
+                job_num = int(self.ui.prompt_input(f"Enter schedule number to remove (1-{len(jobs)})"))
+                job_to_remove = jobs[job_num - 1]
+                
+            self.log_manager.remove_specific_cron_job(job_to_remove)
+            self.ui.print_success("Schedule removed successfully")
+            
+        elif action == 2:  
+            self.log_manager.remove_cron_job()
+            self.ui.print_success("All automation schedules removed")
+            
+        return self._get_cleaning_mode()
+
+    def _setup_code_cleaning(self) -> bool:
+        """
+        Sets up configuration for cleaning code files.
+
+        This method guides the user through selecting source files and configuring backup options.
+
+        Returns:
+            bool: True if setup is successful; False otherwise.
+        """
+        
+        self.ui.print_step("Select source", 3, 1)
+        source_choice = self.ui.prompt_choice(
+            "Where are the files you want to clean?",
+            ["Select a directory", "Select specific files"]
+        )
+
+        self.ui.print_step("Specify location", 3, 2)
+        if source_choice == 1:
+            if not self._handle_directory_mode():
+                return False
+        else:
+            if not self._handle_file_mode():
+                return False
+
+        return self._setup_assets_and_backup()
+
+    def _handle_directory_mode(self) -> bool:
+        """
+        Handles directory selection for code files.
+
+        This method allows the user to specify a directory for cleaning, validating the path and selecting file types.
+
+        Returns:
+            bool: True if the directory is valid and files are selected; False otherwise.
+        """
+        while True:
+            try:
+                path = input(f"{self.ui.BOLD}Enter directory path (or '.' for current directory): {self.ui.END}")
+                if not os.path.isdir(path):
+                    self.ui.print_error("Invalid directory path")
+                    continue
+
+                self.source_path = os.path.abspath(path)
+                self._display_supported_types()
+                
+                if not self._select_file_types():
+                    return False
+                    
+                return True
+
+            except KeyboardInterrupt:
+                raise
+            except Exception as e:
+                self.ui.print_error(f"Error: {str(e)}")
+                return False
+
+    def _handle_file_mode(self) -> bool:
+        """
+        Handles individual file selection for cleaning.
+
+        This method allows the user to select specific files for cleaning, validating each file's existence and type.
+
+        Returns:
+            bool: True if valid files are selected; False otherwise.
+        """
+        self._display_supported_types()
+        files = self._get_file_list()
+        
+        if not files:
+            self.ui.print_error("No files specified")
+            return False
+
+        valid_files, invalid_files = self.validate_files(files)
+        
+        if invalid_files:
+            self.ui.print_error("\nThe following files cannot be processed:")
+            for file in invalid_files:
+                self.ui.print_error(f"  - {file}")
+
+        if not valid_files:
+            self.ui.print_error("No valid files to process")
+            return False
+
+        self.source_path = valid_files
+        self.selected_types = {Path(f).suffix.lower() for f in valid_files}
+        return True
+
+    def _setup_log_cleaning(self) -> bool:
+        """
+        Sets up configuration for cleaning log files.
+
+        This method prompts the user to specify how log files will be selected for cleaning.
+
+        Returns:
+            bool: True if log cleaning setup is successful; False otherwise.
+        """
+        self.ui.print_step("Log file cleaning", 4, 2)
+        
+        source_choice = self.ui.prompt_choice(
+            "How would you like to specify the log files location?",
+            ["Current directory (.)", "Specify directory path", "Select specific log files"]
+        )
+        
+        log_files = []
+        log_dir = ""
+        
+        if source_choice == 1: 
+            log_dir = str(Path('.').resolve())
+            self.ui.print_info(f"Searching for log files in current directory: {log_dir}")
+            log_files = self.log_manager.get_log_files(Path(log_dir))
+            if not log_files:
+                self.ui.print_error("No log files found in the current directory")
+                return False
+                
+        elif source_choice == 2: 
+            while True:
+                log_dir = input(f"{self.ui.BOLD}Enter directory path: {self.ui.END}")
+                
+                if os.path.isfile(log_dir):
+                    self.ui.print_error("Please enter a directory path, not a file path")
+                    continue
+                    
+                if not os.path.isdir(log_dir):
+                    self.ui.print_error("Invalid directory path. Please try again")
+                    continue
+                        
+                self.ui.print_info(f"Searching for log files in: {log_dir}")
+                log_files = self.log_manager.get_log_files(Path(log_dir))
+                
+                if not log_files:
+                    self.ui.print_error(f"No log files found in: {log_dir}")
+                    if not self.ui.prompt_yes_no("Would you like to try another directory?"):
+                        return False
+                    continue
+
+                break
+                
+        else: 
+            self.ui.print_warning("\nEnter log file paths one by one. Press Enter twice when done.")
+            while True:
+                file_path = input(f"{self.ui.BOLD}Enter log file path (or press Enter to finish): {self.ui.END}")
+                if not file_path and log_files:
+                    break
+                if not file_path:
+                    continue
+                    
+                if not os.path.isfile(file_path):
+                    self.ui.print_error(f"Invalid file path: {file_path}")
+                    continue
+                    
+                file_path = Path(file_path)
+                if not file_path.exists():
+                    self.ui.print_error(f"File does not exist: {file_path}")
+                    continue
+
+                if not self.log_manager.is_log_file(file_path):
+                    self.ui.print_warning(f"File may not be a log file: {file_path}")
+                    if not self.ui.prompt_yes_no("Include this file anyway?"):
+                        continue
+
+                log_files.append(file_path)
+                if not log_dir:
+                    log_dir = str(file_path.parent)
+                    
+            if not log_files:
+                self.ui.print_error("No valid log files specified")
+                return False
+            
+        return self._configure_log_retention(log_files, log_dir)
+
+    def _configure_log_retention(self, log_files: list, log_dir: str) -> bool:
+        """
+        Configures log retention period and automation settings.
+
+        This method allows the user to specify how long logs should be retained and optionally sets up automation.
+
+        Returns:
+            bool: True if configuration is successful; False otherwise.
+        """
+        self.ui.print_info(f"\nFound {len(log_files)} log files")
+        
+        if len(log_files) <= 10:
+            self.ui.print_info("\nLog files found:")
+            for file in log_files:
+                self.ui.print_info(f"  - {file}")
+        
+        if not self.ui.prompt_yes_no("\nProceed with log cleaning?"):
+            return False
+        
+        self.ui.print_step("Set retention period", 4, 3)
+        days = self._get_retention_days()
+        if days is None:
+            return False
+
+        cutoff_date = datetime.now() - timedelta(days=days)
+        files_cleaned, lines_removed = self.log_manager.clean_logs_before_date(log_files, cutoff_date)
+        self.ui.print_success(f"Cleaned {files_cleaned} log files")
+        if files_cleaned > 0:
+            self.ui.print_info(f"Total lines removed: {lines_removed}")
+
+        self.ui.print_step("Automation setup", 4, 4)
+        if self.ui.prompt_yes_no("Would you like to automate log cleaning?"):
+            if not self._setup_automation(log_dir):
+                return False
+        
+        self.ui.print_info("\nLog Cleaning Summary:")
+        self.ui.print_info(f"  Directory: {log_dir}")
+        self.ui.print_info(f"  Files processed: {len(log_files)}")
+        self.ui.print_info(f"  Files cleaned: {files_cleaned}")
+        if files_cleaned > 0:
+            self.ui.print_info(f"  Lines removed: {lines_removed}")
+        self.ui.print_info(f"  Retention period: {days} days")
+        
+        return True
+
+    def _get_retention_days(self) -> Optional[int]:
+        """
+        Prompts user for log retention period in days.
+
+        This method ensures the user provides a valid number of days for log retention.
+
+        Returns:
+            Optional[int]: The number of days to retain logs, or None if input is invalid.
+        """
+        while True:
+            try:
+                days = int(self.ui.prompt_input("Enter number of days to retain logs"))
+                if days < 0:
+                    self.ui.print_error("Please enter a positive number")
+                    continue
+                return days
+            except ValueError:
+                self.ui.print_error("Please enter a valid number")
+
+    def _setup_automation(self, log_dir: str) -> bool:
+        """
+        Sets up automated log cleaning schedule.
+
+        This method prompts the user to specify the time for daily automated cleaning.
+
+        Returns:
+            bool: True if automation setup is successful; False otherwise.
+        """
+        while True:
+            try:
+                hour = int(self.ui.prompt_input("Enter hour for daily cleaning (0-23)"))
+                if not 0 <= hour <= 23:
+                    self.ui.print_error("Hour must be between 0 and 23")
+                    continue
+                    
+                minute = int(self.ui.prompt_input("Enter minute (0-59)"))
+                if not 0 <= minute <= 59:
+                    self.ui.print_error("Minute must be between 0 and 59")
+                    continue
+
+                script_path = os.path.abspath(sys.argv[0])
+                if self.log_manager.setup_cron_job(script_path, log_dir, hour, minute):
+                    self.ui.print_success(f"Automated cleaning scheduled for {hour:02d}:{minute:02d} daily")
+                    return True
+                return False
+
+            except ValueError:
+                self.ui.print_error("Please enter valid numbers")
+                return False
+
+    def _prompt_continue(self) -> bool:
+        """
+        Asks user if they want to perform another operation.
+
+        This method prompts the user for confirmation to continue with additional tasks.
+
+        Returns:
+            bool: True if the user wants to continue; False otherwise.
+        """
+        return self.ui.prompt_yes_no("Would you like to perform another operation?")
+
+    def _display_supported_types(self):
+        """
+        Displays types of files supported for cleaning.
+
+        This method informs the user of all file types that can be cleaned by the utility.
+        """
+        self.ui.print_info("\nSupported file types:")
+        for ext, desc in self.SUPPORTED_EXTENSIONS.items():
+            self.ui.print_info(f"  {ext} - {desc}")
+
+    def _select_file_types(self) -> bool:
+        """
+        Handles selection of specific file types for cleaning.
+
+        This method allows the user to choose which file types they wish to include in the cleaning process.
+
+        Returns:
+            bool: True if file types are selected successfully; False otherwise.
+        """
+        self.ui.print_step("Select file types", 3, 3)
+        if self.ui.prompt_yes_no("Would you like to clean all supported file types? (*)"):
+            self.selected_types = set(self.SUPPORTED_EXTENSIONS.keys())
+            self.ui.print_success("Selected all file types")
+            return True
+
+        self.ui.print_info("Select specific file types:")
+        for ext, desc in self.SUPPORTED_EXTENSIONS.items():
+            if self.ui.prompt_yes_no(f"Include {ext} ({desc})?"):
+                self.selected_types.add(ext)
+
+        if not self.selected_types:
+            self.ui.print_error("No file types selected")
+            return False
+        return True
+
+    def _get_file_list(self) -> list:
+        """
+        Gets a list of file paths from user input.
+
+        This method collects file paths specified by the user for cleaning.
+
+        Returns:
+            list: A list of file paths entered by the user.
+        """
+        files = []
+        self.ui.print_warning("\nEnter file paths one by one. Press Enter twice when done.")
+        
+        while True:
+            file = input(f"{self.ui.BOLD}Enter file path (or press Enter to finish): {self.ui.END}")
+            if not file and files:
+                break
+            if not file:
+                continue
+            files.append(file)
+        
+        return files
+
+    def _setup_assets_and_backup(self) -> bool:
+        """
+        Sets up asset directory and backup configuration.
+
+        This method configures the directory for cleaned assets and prompts for backup options.
+
+        Returns:
+            bool: True if asset setup is successful; False otherwise.
+        """
+        self.assets_dir = self.get_assets_directory(self.source_path)
+        self.should_backup = self.ui.prompt_yes_no("Create backup of modified files?")
+        
+        if self.should_backup:
+            self.create_backup_directory()
+            self.setup_logging()
+            self.ui.print_info("\nBackup Configuration:")
+            self.ui.print_info(f"Assets Directory: {self.assets_dir}")
+            self.ui.print_info(f"Backup Location: {self.current_backup_dir}")
+        
+        return True
 
     def get_assets_directory(self, source_path: Union[str, List[str]]) -> Path:
         """
@@ -215,15 +594,11 @@ class LogCleaner:
         Returns:
             Path: A Path object pointing to the determined assets directory.
         """
-        # If cleaning specific files, use common parent directory
         if isinstance(source_path, list):
-            # Convert all paths to Path objects
             paths = [Path(p).resolve() for p in source_path]
-            # Find common parent directory
             common_parent = os.path.commonpath([str(p.parent) for p in paths])
             base_dir = Path(common_parent)
         else:
-            # If cleaning a directory, use that directory
             base_dir = Path(source_path).resolve()
             
         return base_dir / self.ASSETS_DIR_NAME
@@ -242,37 +617,6 @@ class LogCleaner:
         backup_dir = self.assets_dir / 'backups'
         self.current_backup_dir = backup_dir / f'backup_{timestamp}'
         self.current_backup_dir.mkdir(parents=True, exist_ok=True)
-    
-    # def setup_logging(self) -> None:
-        # """
-        # Configures the logging settings for the LogCleaner class.
-
-        # This method establishes a logging system to track the application's operations, including session starts, file processing,
-        # and any errors encountered. The logs are saved in a dedicated directory within the assets directory, allowing for
-        # easy access and review.
-
-        # Raises:
-        #     RuntimeError: If the assets directory is not initialized.
-        # """
-    #     if not self.assets_dir:
-    #         raise RuntimeError("Assets directory not initialized")
-            
-    #     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    #     logs_dir = self.assets_dir / 'logs'
-    #     logs_dir.mkdir(parents=True, exist_ok=True)
-        
-    #     self.log_file = logs_dir / f'cleanup_log_{timestamp}.log'
-        
-    #     logging.basicConfig(
-    #         level=logging.INFO,
-    #         format='%(asctime)s - %(levelname)s - %(message)s',
-    #         handlers=[
-    #             logging.FileHandler(str(self.log_file)),
-    #             logging.StreamHandler()
-    #         ]
-    #     )
-    #     self.logger = logging.getLogger(__name__)
-    #     self.logger.info(f"Started new cleanup session. Log file: {self.log_file}")
     
     def setup_logging(self) -> None:
         """
@@ -364,7 +708,6 @@ class LogCleaner:
             return True
             
         try:
-            # Check if the file is within the assets directory
             file_path.relative_to(self.assets_dir)
             return False 
         except ValueError:
@@ -379,11 +722,9 @@ class LogCleaner:
         """
         try:
             if isinstance(self.source_path, list):
-                # Process specific files - no additional scanning needed
                 for file_path in self.source_path:
                     self.remove_logging_statements(file_path)
             else:
-                # Process directory
                 self.process_directory(self.source_path)
         except KeyboardInterrupt:
             self.cleanup()
@@ -404,7 +745,6 @@ class LogCleaner:
         spinner = self.ui.spinner("Processing files")
         
         for root, _, files in os.walk(directory):
-            # Skip the assets directory
             if self.assets_dir and Path(root).is_relative_to(self.assets_dir):
                 continue
                 
@@ -443,8 +783,7 @@ class LogCleaner:
                     removed_lines.append((line_num, line.strip()))
                     self.stats['lines_removed'] += 1
                     file_modified = True
-                    
-                    # Log the removal if logging is enabled
+
                     if hasattr(self, 'logger'):
                         self.logger.info(f"Removed {statement_type} from {file_path} at line {line_num}: {line.strip()}")
                 else:
@@ -452,7 +791,6 @@ class LogCleaner:
 
             if file_modified:
                 if self.should_backup:
-                    # Create backup before modifying the file
                     backup_path = self.make_backup(file_path)
                     if hasattr(self, 'logger'):
                         self.logger.info(f"Created backup at: {backup_path}")
@@ -551,28 +889,22 @@ class LogCleaner:
             
         file_path = Path(file_path).resolve()
         
-        # Skip if file is in assets directory
         if not self.should_backup_file(file_path):
             return None
             
-        # Get base directory for relative path calculation
         if isinstance(self.source_path, list):
             source_base = Path(os.path.commonpath([str(Path(p).parent) for p in self.source_path]))
         else:
             source_base = Path(self.source_path)
         
         try:
-            # Calculate relative path from source base
             rel_path = file_path.relative_to(source_base)
         except ValueError:
-            # Fallback for files outside source directory
             rel_path = Path(file_path.name)
             
-        # Create backup path maintaining directory structure
         backup_path = self.current_backup_dir / rel_path
         backup_path.parent.mkdir(parents=True, exist_ok=True)
         
-        # Copy the file to backup location
         shutil.copy2(str(file_path), str(backup_path))
         
         if hasattr(self, 'logger'):
@@ -633,10 +965,8 @@ class LogCleaner:
                     handler.close()
                     self.logger.removeHandler(handler)
             
-            # Clear any spinning cursors or progress bars
             self.ui.clear_line()
             
-            # Print final message
             self.ui.print_warning("Cleanup session ended.")
             
         except Exception as e:
